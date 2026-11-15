@@ -1,0 +1,31 @@
+services:
+  banco:
+    image: postgres:16-alpine
+    container_name: gt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: liga_gt
+      POSTGRES_USER: liga
+      POSTGRES_PASSWORD: liga_dev
+    ports: ["5432:5432"]
+    volumes:
+      - dados_postgres:/var/lib/postgresql/data
+      - ./server/src/infra/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./server/src/infra/temporada.sql:/docker-entrypoint-initdb.d/02-temporada.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liga -d liga_gt"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  aplicacao:
+    build: .
+    container_name: gt-aplicacao
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://liga:liga_dev@banco:5432/liga_gt
+      PORT: 3001
+    ports: ["5173:5173", "3001:3001"]
+    depends_on:
+      banco: {condition: service_healthy}
+volumes:
+  dados_postgres:

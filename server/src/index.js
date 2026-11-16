@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
 import { calcularClassificacao } from './domain/simulacao.js';
+import { contratoPatrocinioConhecido, patrocinadoresDisponiveis } from './domain/patrocinios.js';
 
 const { Pool } = pg;
 const banco = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -47,6 +48,10 @@ app.get('/api/etapas', async (_req, res) => {
 });
 
 app.get('/api/regras', async (_req, res) => res.json(await buscarRegras()));
+app.get('/api/patrocinios', (_req, res) => res.json([
+  ...patrocinadoresDisponiveis.map(nome => ({ nome, regra: 'contrato' })),
+  { nome: 'Elf', regra: 'padrao' },
+]));
 
 app.get('/api/series/:serie/classificacao', async (req, res) => {
   const serie = req.params.serie.toUpperCase();
@@ -69,6 +74,35 @@ app.post('/api/simular', async (req, res) => {
     }
     if (new Set(posicoes).size !== posicoes.length) {
       return res.status(400).json({ erro: 'Cada piloto precisa ter uma posição de chegada diferente.' });
+    }
+    const grids = pilotos.map(piloto => Number(previsoes[piloto.id]?.grid))
+      .filter(grid => Number.isInteger(grid) && grid > 0);
+    if (grids.some(grid => grid > pilotos.length)) {
+      return res.status(400).json({ erro: `O grid deve ser uma posição entre 1 e ${pilotos.length}.` });
+    }
+    if (new Set(grids).size !== grids.length) {
+      return res.status(400).json({ erro: 'Cada posição de grid pode ser ocupada por apenas um piloto.' });
+    }
+    const pilotosP1 = pilotos.filter(piloto => previsoes[piloto.id]?.pole);
+    const pilotosVmr = pilotos.filter(piloto => previsoes[piloto.id]?.vmr);
+    if (pilotosP1.length > 1 || pilotosVmr.length > 1) {
+      return res.status(400).json({ erro: 'Só pode haver um piloto com P1 e um com VMR por etapa.' });
+    }
+    if (pilotosP1.some(piloto => Number(previsoes[piloto.id]?.grid) !== 1)
+      || pilotos.some(piloto => Number(previsoes[piloto.id]?.grid) === 1 && !previsoes[piloto.id]?.pole)) {
+      return res.status(400).json({ erro: 'P1 deve corresponder ao piloto que larga na posição 1 do grid.' });
+    }
+    if (numeroEtapa === 7) {
+      const pendentes = pilotos.filter(piloto => !resultados.some(resultado =>
+        Number(resultado.piloto_id) === Number(piloto.id) && resultado.etapa_patrocinio,
+      ));
+      for (const piloto of pendentes) {
+        const previsao = previsoes[piloto.id] || {};
+        if (contratoPatrocinioConhecido(previsao.patrocinador)
+          && (!Number.isInteger(Number(previsao.grid)) || Number(previsao.grid) < 1 || Number(previsao.grid) > pilotos.length)) {
+          return res.status(400).json({ erro: `Informe o grid de largada de ${piloto.nome} para calcular o bônus do patrocínio.` });
+        }
+      }
     }
     const classificacao = calcularClassificacao(pilotos, resultados, {
       etapaSimulada: numeroEtapa,
